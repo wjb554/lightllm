@@ -1,0 +1,71 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build (cmake + ninja)",
+            "detail": "Configure and build all targets",
+            "type": "shell",
+            "command": "cmd",
+            "args": [
+                "/c",
+                "call \"C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Auxiliary\\Build\\vcvarsall.bat\" x64 >nul 2>&1 && cd /d \"${workspaceFolder}\\build\" && cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release && ninja -j4"
+            ],
+            "problemMatcher": ["$msCompile"],
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "Run All Tests",
+            "detail": "Run all 11 unit tests and show pass/fail",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "for exe in test_tensor.exe test_ops.exe test_quality.exe test_model.exe test_sampling.exe test_lm_head.exe test_paged_attention.exe test_prefix_cache.exe test_scheduler.exe test_batch_loop.exe; do printf '%-25s ' $exe; ./build/$exe 2>&1 | grep -oE '[0-9]+ passed' | tail -1; done"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always" }
+        },
+        {
+            "label": "Run Generation Demo",
+            "detail": "Generate text with sampling (12 tokens)",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/test_generate.exe",
+            "args": [],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always" }
+        },
+        {
+            "label": "Run Throughput Simulation",
+            "detail": "40s high-throughput sim, 3 req/s, 124 mixed-length requests",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/bench_throughput.exe",
+            "args": ["40", "3.0"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always" }
+        },
+        {
+            "label": "Run Concurrent Batching Demo",
+            "detail": "3 users batched generation",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/test_concurrent.exe",
+            "args": [],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always" }
+        },
+        {
+            "label": "Run Single Test (choose in terminal)",
+            "detail": "Open terminal and run a test manually",
+            "type": "shell",
+            "command": "bash",
+            "args": [],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "presentation": { "reveal": "always", "focus": true }
+        }
+    ]
+}
