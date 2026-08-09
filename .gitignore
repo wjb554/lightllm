@@ -34,3 +34,5 @@ quick_*.bat
 run_*.bat
 
 *.tex
+*.html
+*.md
