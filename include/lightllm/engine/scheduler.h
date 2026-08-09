@@ -28,6 +28,11 @@ struct Request {
     int max_new_tokens = 64;
     int eos_token_id = 151643;
 
+    /// JSON Schema for structured output (empty = unconstrained).
+    std::string json_schema;
+    /// Regex pattern for structured output (empty = unconstrained).
+    std::string regex;
+
     enum State { WAITING, DECODING, FINISHED };
     State state = WAITING;
 

@@ -94,9 +94,13 @@ public:
     ~BatchMainLoop();
 
     /// Submit a new request. Returns the assigned request ID immediately.
+    /// @param json_schema  JSON Schema string (empty = unconstrained generation)
+    /// @param regex        Regex pattern (empty = unconstrained; json_schema wins if both set)
     int submit(const std::vector<int>& prompt_tokens,
                int max_new_tokens = 64,
-               int eos_token_id = 151643);
+               int eos_token_id = 151643,
+               const std::string& json_schema = "",
+               const std::string& regex = "");
 
     /// Execute ONE scheduler.step() + engine.step() cycle.
     /// @return true if work was done, false if idle.
@@ -107,6 +111,9 @@ public:
 
     /// True if any requests are still active (waiting or decoding).
     bool has_active() const;
+
+    /// Access generated tokens for a finished request (empty if still active).
+    const std::vector<int>& generated_tokens(int request_id) const;
 
     /// Number of active + waiting requests.
     int active_count() const;

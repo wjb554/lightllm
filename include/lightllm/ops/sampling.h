@@ -28,9 +28,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <vector>
+
+// Forward declare xgrammar types at global scope (the real xgrammar lives in ::xgrammar)
+namespace xgrammar { class GrammarMatcher; }
 
 namespace lightllm {
 namespace ops {
@@ -67,6 +71,10 @@ struct SamplingParams {
     /// in the batch gets a statistically independent draw.
     ///   seed == 0  ->  seed from std::random_device{} (non-reproducible).
     uint64_t seed = 42;
+
+    // Pointer to xgrammar GrammarMatcher (nullptr = unconstrained).
+    // Owned by RequestState, passed here for mask access only.
+    xgrammar::GrammarMatcher* grammar_matcher = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -90,7 +98,8 @@ struct SamplingParams {
 /// Thread safety:  not reentrant — only `rng` is mutated.  Multiple
 /// callers must each own their `std::mt19937`.
 int sample(const float* logits, int vocab_size,
-           const SamplingParams& params, std::mt19937& rng);
+           const SamplingParams& params, std::mt19937& rng,
+           const int32_t* grammar_mask = nullptr);
 
 // ---------------------------------------------------------------------------
 // sample_batch — sample a batch of tokens (one per sequence)
@@ -110,17 +119,24 @@ void sample_batch(int* out_tokens, const float* logits,
                   int batch_size, int vocab_size,
                   const SamplingParams& params, uint64_t seed);
 
+/// Apply a grammar bitmask to logits in-place (masked tokens → -inf).
+void apply_grammar_mask(float* logits, int vocab_size, const int32_t* mask);
+
 // ===========================================================================
 //  Inline helpers (used internally by sample / sample_batch)
 // ===========================================================================
 
 namespace detail {
 
+// Negative infinity for logit masking.  Avoids INFINITY macro which
+// triggers nvcc warning #221-D on Windows.
+constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
+
 /// Numerically stable softmax in-place.  Returns the sum (will be > 0 if
 /// at least one non -inf logit exists).
 inline float softmax_inplace(float* x, int n) {
     // Find max for numerical stability
-    float max_val = -INFINITY;
+    float max_val = NEG_INF;
     for (int i = 0; i < n; ++i)
         if (x[i] > max_val) max_val = x[i];
 
@@ -165,7 +181,7 @@ inline int apply_top_k(float* logits, int n, int k) {
 
     int kept = 0;
     for (int i = 0; i < n; ++i) {
-        if (logits[i] < threshold) logits[i] = -INFINITY;
+        if (logits[i] < threshold) logits[i] = NEG_INF;
         else ++kept;
     }
     return kept;

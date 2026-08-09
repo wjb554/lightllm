@@ -34,6 +34,7 @@
 #include "lightllm/ops/elementwise.h"
 #include "lightllm/ops/sampling.h"
 #include "lightllm/ops/lm_head.h"
+#include "lightllm/tokenizer/tokenizer.h"
 
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -45,6 +46,9 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+
+#include <xgrammar/xgrammar.h>
+#include <dlpack/dlpack.h>
 
 namespace lightllm {
 namespace engine {
@@ -330,11 +334,37 @@ EngineServer::EngineServer(const std::string& model_dir,
     d_all_block_tables_ = Tensor(
         {max_batch_tokens_ * max_blocks_per_seq_}, DType::I32, Device::CUDA);
     d_all_seq_lens_ = Tensor({max_batch_tokens_}, DType::I32, Device::CUDA);
+
+    // ---- Initialize xgrammar (structured output) ----
+    {
+        snprintf(buf, sizeof(buf), "%s/tokenizer.json", model_dir.c_str());
+        tokenizer::Tokenizer tok(buf);
+        std::vector<std::string> vocab(vocab_);
+        for (int i = 0; i < vocab_; ++i) {
+            vocab[i] = tok.id_to_str(i);
+        }
+        tokenizer_info_ = std::make_unique<xgrammar::TokenizerInfo>(vocab);
+        grammar_compiler_ = std::make_unique<xgrammar::GrammarCompiler>(
+            *tokenizer_info_,
+            2,     // max_threads
+            true   // cache_enabled
+        );
+        printf("xgrammar: GrammarCompiler ready, vocab_size=%d\n", vocab_);
+    }
 }
+
+// EngineServer destructor needs xgrammar complete types.
+// Defined here (not inline in header) so that TUs that only include engine.h
+// don't need the full xgrammar headers.
+EngineServer::~EngineServer() = default;
 
 // ============================================================================
 // create_request_state
 // ============================================================================
+
+// RequestState destructor needs the complete GrammarMatcher type.
+// Defined here because engine_server.cpp includes <xgrammar/xgrammar.h>.
+RequestState::~RequestState() = default;
 
 std::unique_ptr<RequestState> EngineServer::create_request_state(
     const Request& req, int D)
@@ -344,6 +374,32 @@ std::unique_ptr<RequestState> EngineServer::create_request_state(
     state->prompt_tokens = req.prompt_tokens;
     state->max_new_tokens = req.max_new_tokens;
     state->eos_token_id = req.eos_token_id;
+
+    // ---- Initialize GrammarMatcher if request has structured output ----
+    if (!req.json_schema.empty()) {
+        try {
+            auto compiled = grammar_compiler_->CompileJSONSchema(
+                req.json_schema);
+            state->grammar_matcher = std::make_unique<xgrammar::GrammarMatcher>(
+                compiled);
+            state->grammar_mask.assign((vocab_ + 31) / 32, 0);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "Grammar compile failed for req %d: %s\n",
+                    req.id, e.what());
+        }
+    } else if (!req.regex.empty()) {
+        try {
+            auto compiled = grammar_compiler_->CompileRegex(
+                req.regex);
+            state->grammar_matcher = std::make_unique<xgrammar::GrammarMatcher>(
+                compiled);
+            state->grammar_mask.assign((vocab_ + 31) / 32, 0);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "Regex compile failed for req %d: %s\n",
+                    req.id, e.what());
+        }
+    }
+
     state->seq_len = 0;
     state->num_prefilled = 0;
     state->num_cached_tokens = 0;
@@ -1054,6 +1110,19 @@ std::vector<SampledToken> EngineServer::step(
         if (it == states.end()) continue;
         auto& state = *it->second;
 
+        // If the grammar has already terminated (JSON complete), skip
+        // further generation for this request and mark it finished.
+        if (state.grammar_matcher
+            && state.grammar_matcher->IsTerminated()) {
+            state.finished = true;
+            results.push_back(SampledToken{
+                state.id,
+                state.eos_token_id,
+                true  // is_eos
+            });
+            continue;
+        }
+
         // Extract this token's hidden state (row `start`, only 1 row)
         Tensor tok_h({1, D_}, DType::F32, Device::CUDA);
         cudaMemcpy(tok_h.raw(),
@@ -1066,11 +1135,43 @@ std::vector<SampledToken> EngineServer::step(
         std::vector<float> logits_cpu(vocab_);
         logits_gpu.copy_to(logits_cpu.data(), vocab_ * sizeof(float));
 
-        // Sample
+        // Sample — use greedy when grammar is active (the grammar
+        // already constrains valid tokens; randomness adds noise).
         SamplingParams sp;
-        sp.temperature = 1.0f;
+        sp.temperature = state.grammar_matcher ? 0.0f : 1.0f;
         sp.seed = 42 + state.seq_len;
-        int next_token = ops::sample(logits_cpu.data(), vocab_, sp, rng);
+
+        const int32_t* mask_ptr = nullptr;
+        if (state.grammar_matcher) {
+            // Build DLTensor wrapper around our pre-allocated bitmask buffer.
+            int64_t mask_shape = static_cast<int64_t>(state.grammar_mask.size());
+            DLTensor bitmask_dl;
+            bitmask_dl.data        = state.grammar_mask.data();
+            bitmask_dl.device      = {kDLCPU, 0};
+            bitmask_dl.ndim        = 1;
+            bitmask_dl.shape       = &mask_shape;
+            bitmask_dl.dtype       = {kDLInt, 32, 1};
+            bitmask_dl.strides     = nullptr;
+            bitmask_dl.byte_offset = 0;
+
+            bool constrains = state.grammar_matcher->FillNextTokenBitmask(
+                &bitmask_dl);
+            if (constrains) {
+                mask_ptr = state.grammar_mask.data();
+            }
+        }
+
+        int next_token = ops::sample(logits_cpu.data(), vocab_, sp, rng, mask_ptr);
+
+        // Advance grammar FSM; if it reaches terminal state after this
+        // token (e.g. `}` closed the JSON object), mark finished so the
+        // next step skips this request cleanly.
+        if (state.grammar_matcher) {
+            state.grammar_matcher->AcceptToken(next_token);
+            if (state.grammar_matcher->IsTerminated()) {
+                state.finished = true;
+            }
+        }
 
         // Update state
         state.generated_tokens.push_back(next_token);

@@ -31,6 +31,10 @@
 #include "lightllm/model/model_config.h"
 #include "lightllm/kv_cache/block_allocator.h"
 
+// Forward declare xgrammar types at GLOBAL scope (the real xgrammar lives in
+// ::xgrammar, NOT inside lightllm::engine).
+namespace xgrammar { class GrammarMatcher; class GrammarCompiler; struct TokenizerInfo; }
+
 // Forward declare scheduler types (avoid circular include; scheduler.h includes
 // and uses Request / ScheduleStep / ScheduleEntry)
 namespace lightllm {
@@ -70,6 +74,10 @@ struct SampledToken {
 //   - next_hidden_state  (written after every step, read on next decode step)
 //   - finished       (set true on EOS or max_tokens)
 struct RequestState {
+    // Destructor defined in engine_server.cpp (needs xgrammar::GrammarMatcher
+    // complete type for unique_ptr deleter).
+    ~RequestState();
+
     int id;                               // matches Request.id from scheduler
     std::vector<int> prompt_tokens;       // original prompt (immutable after creation)
     std::vector<int> generated_tokens;    // tokens generated so far (appended each decode step)
@@ -95,6 +103,13 @@ struct RequestState {
     bool finished = false;   // engine sets true when EOS emitted or max_new_tokens reached
     int max_new_tokens;
     int eos_token_id;
+
+    /// Grammar matcher for constrained decoding (nullptr = unconstrained).
+    /// Created during create_request_state() if the request has a schema.
+    std::unique_ptr<xgrammar::GrammarMatcher> grammar_matcher;
+
+    /// Buffer for FillNextTokenBitmask output (reused every decode step).
+    std::vector<int32_t> grammar_mask;
 };
 
 // ============================================================================
@@ -201,6 +216,9 @@ public:
                  kv_cache::PrefixCachePolicy prefix_cache_policy
                      = kv_cache::prefix_cache_policy_from_env());
 
+    // Defined in engine_server.cpp (needs xgrammar complete types for unique_ptr)
+    ~EngineServer();
+
     /// Create per-request state for a new request.
     /// Allocates NO KV blocks yet — blocks are allocated lazily during the
     /// first prefill step.
@@ -246,6 +264,10 @@ private:
     int max_blocks_per_seq_;
     int kv_cache_mb_ = 0;
     kv_cache::PrefixCachePolicy prefix_cache_policy_;
+
+    // ---- xgrammar infrastructure ----
+    std::unique_ptr<xgrammar::GrammarCompiler> grammar_compiler_;
+    std::unique_ptr<xgrammar::TokenizerInfo> tokenizer_info_;
 
     std::vector<std::unique_ptr<kv_cache::BlockAllocator>> kv_allocators_;
 

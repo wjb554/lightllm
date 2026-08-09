@@ -20,7 +20,8 @@ namespace ops {
 // ===========================================================================
 
 int sample(const float* logits, int vocab_size,
-           const SamplingParams& params, std::mt19937& rng) {
+           const SamplingParams& params, std::mt19937& rng,
+           const int32_t* grammar_mask) {
 
     // ------------------------------------------------------------------
     // 0.  Defensive guards
@@ -33,13 +34,26 @@ int sample(const float* logits, int vocab_size,
     //  temperature < 1e-5  behaves indistinguishably from greedy but
     //  avoids division by a tiny number in step 2.
     if (params.temperature < 1e-5f) {
-        int best = 0;
-        float best_val = logits[0];
-        for (int i = 1; i < vocab_size; ++i) {
+        // Apply grammar mask even for greedy — search best *allowed* token.
+        int best = -1;
+        float best_val = -INFINITY;
+        for (int i = 0; i < vocab_size; ++i) {
+            if (grammar_mask != nullptr) {
+                int word = i / 32;
+                int bit  = i % 32;
+                if (!(grammar_mask[word] & (1u << bit))) continue;
+            }
             if (logits[i] > best_val) {
                 best_val = logits[i];
                 best = i;
             }
+        }
+        // Fallback: if mask blocked everything, return global argmax
+        if (best < 0) {
+            best = 0;
+            best_val = logits[0];
+            for (int i = 1; i < vocab_size; ++i)
+                if (logits[i] > best_val) { best_val = logits[i]; best = i; }
         }
         return best;
     }
@@ -48,6 +62,17 @@ int sample(const float* logits, int vocab_size,
     // 3.  Copy logits into a mutable working buffer
     // ------------------------------------------------------------------
     std::vector<float> work(logits, logits + vocab_size);
+    if (grammar_mask != nullptr) {
+        apply_grammar_mask(work.data(), vocab_size, grammar_mask);
+        // Verify at least one token remains
+        bool any = false;
+        for (int i = 0; i < vocab_size; ++i) if (work[i] > -INFINITY) { any = true; break; }
+        if (!any) {
+            int best = 0; float best_val = logits[0];
+            for (int i = 1; i < vocab_size; ++i) if (logits[i] > best_val) { best_val = logits[i]; best = i; }
+            return best;
+        }
+    }
 
     // ------------------------------------------------------------------
     // 4.  Temperature scaling
@@ -330,6 +355,17 @@ void sample_batch(int* out_tokens, const float* logits,
         std::mt19937 rng(static_cast<unsigned>(seed + static_cast<uint64_t>(i)));
         out_tokens[i] = sample(logits + i * vocab_size, vocab_size,
                                 params, rng);
+    }
+}
+
+void apply_grammar_mask(float* logits, int vocab_size, const int32_t* mask) {
+    if (!mask) return;
+    for (int i = 0; i < vocab_size; ++i) {
+        int word = i / 32;
+        int bit  = i % 32;
+        if (!(mask[word] & (1u << bit))) {
+            logits[i] = -INFINITY;
+        }
     }
 }
 

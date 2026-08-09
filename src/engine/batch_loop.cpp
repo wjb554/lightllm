@@ -85,7 +85,9 @@ double BatchMainLoop::wall_clock() const {
 
 int BatchMainLoop::submit(const std::vector<int>& prompt_tokens,
                           int max_new_tokens,
-                          int eos_token_id)
+                          int eos_token_id,
+                          const std::string& json_schema,
+                          const std::string& regex)
 {
     int id = next_id_++;
 
@@ -96,6 +98,8 @@ int BatchMainLoop::submit(const std::vector<int>& prompt_tokens,
     sreq.prompt_tokens   = prompt_tokens;
     sreq.max_new_tokens  = max_new_tokens;
     sreq.eos_token_id    = eos_token_id;
+    sreq.json_schema     = json_schema;
+    sreq.regex           = regex;
     sreq.state           = Request::WAITING;
     sreq.num_computed    = 0;
 
@@ -245,6 +249,13 @@ void BatchMainLoop::run() {
 
 bool BatchMainLoop::has_active() const {
     return scheduler_->num_active() > 0;
+}
+
+const std::vector<int>& BatchMainLoop::generated_tokens(int request_id) const {
+    static const std::vector<int> empty;
+    auto it = states_.find(request_id);
+    if (it == states_.end()) return empty;
+    return it->second->generated_tokens;
 }
 
 int BatchMainLoop::active_count() const {
