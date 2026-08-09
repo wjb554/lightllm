@@ -28,8 +28,9 @@ endif()
 
 # ---- Platform-specific flags ----
 if(MSVC)
-    # MSVC: force UTF-8 (CXX only, not passed to nvcc)
+    # MSVC: force UTF-8 for both CXX and CUDA (nvcc passes -Xcompiler to cl.exe)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /utf-8")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/utf-8")
 else()
     # GCC/Clang: enable warnings, C++20
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O3")
@@ -37,6 +38,14 @@ endif()
 
 # Find packages
 find_package(CUDAToolkit REQUIRED)
+
+# ---- xgrammar (structured output / constrained decoding) ----
+# Git submodule at third_party/xgrammar/ (v0.2.5)
+set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
+set(XGRAMMAR_BUILD_CXX_TESTS OFF CACHE BOOL "" FORCE)
+set(XGRAMMAR_ENABLE_CPPTRACE OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/xgrammar
+                 ${CMAKE_BINARY_DIR}/xgrammar)
 
 # --- Library: lightllm ---
 set(LIGHTLLM_SOURCES
@@ -104,7 +113,7 @@ set_source_files_properties(src/engine/engine_server.cpp PROPERTIES LANGUAGE CUD
 
 add_library(lightllm STATIC ${LIGHTLLM_SOURCES} ${LIGHTLLM_HEADERS})
 target_include_directories(lightllm PUBLIC include)
-target_link_libraries(lightllm PUBLIC CUDA::cudart CUDA::cublas)
+target_link_libraries(lightllm PUBLIC CUDA::cudart CUDA::cublas xgrammar)
 
 # Windows: link winsock for HTTP server
 if(WIN32)
@@ -132,6 +141,8 @@ add_lightllm_test(test_paged_prefill tests/test_paged_prefill.cu)
 add_lightllm_test(test_paged_model tests/test_paged_model.cpp)
 add_lightllm_test(test_generate tests/test_generate.cu)
 add_lightllm_test(test_sampling tests/test_sampling.cpp)
+add_lightllm_test(test_structured_output tests/test_structured_output.cpp)
+add_lightllm_test(test_structured_e2e tests/test_structured_e2e.cpp)
 add_lightllm_test(test_lm_head tests/test_lm_head.cu)
 
 # --- Install ---
