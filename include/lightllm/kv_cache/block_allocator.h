@@ -41,9 +41,11 @@ public:
     /// @param num_kv_heads  KV heads (2 for Qwen2.5-0.5B GQA)
     /// @param head_dim      dimension per head (64)
     /// @param policy        prefix-cache policy (Hash / Radix)
+    /// @param kv_dtype      data type for K/V storage (F32 or F16)
     BlockAllocator(int num_blocks, int block_size,
                    int num_kv_heads, int head_dim,
-                   PrefixCachePolicy policy = PrefixCachePolicy::Hash);
+                   PrefixCachePolicy policy = PrefixCachePolicy::Hash,
+                   DType kv_dtype = DType::F32);
 
     // ------------------------------------------------------------------
     // Block allocation
@@ -108,6 +110,11 @@ public:
     /// sequence adopts a shared block found by find_cached_prefix).
     void increment_ref(int block_id);
 
+    /// Full reset: rebuild free list, clear all block metadata,
+    /// replace prefix cache with a fresh one, zero GPU storage.
+    /// Used between benchmark runs to ensure a clean KV cache state.
+    void reset();
+
     // ------------------------------------------------------------------
     // Accessors
     // ------------------------------------------------------------------
@@ -119,18 +126,22 @@ public:
     /// Raw pointer to entire K/V storage (for CUDA kernels).
     const void* k_storage_raw() const { return k_storage_.raw(); }
     const void* v_storage_raw() const { return v_storage_.raw(); }
+    size_t k_storage_bytes() const { return k_storage_.nbytes(); }
+    size_t v_storage_bytes() const { return v_storage_.nbytes(); }
 
     int num_blocks()  const { return num_blocks_; }
     int block_size()  const { return block_size_; }
     int num_free()    const { return static_cast<int>(free_list_.size()); }
     int num_kv_heads() const { return num_kv_heads_; }
     int head_dim()    const { return head_dim_; }
+    DType kv_dtype()  const { return kv_dtype_; }
 
     PrefixCachePolicy policy() const { return policy_; }
     const PrefixCache* prefix_cache() const { return prefix_cache_.get(); }
 
 private:
     int num_blocks_, block_size_, num_kv_heads_, head_dim_;
+    DType kv_dtype_ = DType::F32;
     PrefixCachePolicy policy_;
     std::vector<Block> blocks_;
     std::deque<int> free_list_;

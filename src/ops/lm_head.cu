@@ -1,6 +1,7 @@
 /// GPU lm_head kernel — see include/lightllm/ops/lm_head.h for architecture docs.
 #include "lightllm/ops/lm_head.h"
 #include "lightllm/ops/dispatch.h"
+#include "lightllm/ops/gemm.h"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <stdexcept>
@@ -59,6 +60,10 @@ Tensor lm_head_logits(const Tensor& h, const Tensor& embed) {
     // Accept hidden as [D] or [1, D] — last dimension is always D.
     int D = h.size(h.dims() - 1);
     int vocab = embed.size(0);
+
+    if (h.dtype() == DType::F16 && embed.dtype() == DType::F16) {
+        return gemm_f16f32(h, embed, true);
+    }
 
     if (embed.size(1) != D) {
         throw std::runtime_error(

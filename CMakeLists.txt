@@ -60,6 +60,7 @@ set(LIGHTLLM_SOURCES
     src/ops/unary.cu
     src/ops/softmax.cu
     src/ops/reduce.cu
+    src/ops/argmax.cu
     src/ops/embedding.cu
     src/ops/sampling.cpp
     src/ops/lm_head.cu
@@ -73,6 +74,7 @@ set(LIGHTLLM_SOURCES
     src/engine/scheduler.cpp
     src/engine/engine_paged.cpp
     src/engine/engine_server.cpp
+    src/engine/draft_engine.cpp
     src/engine/batch_loop.cpp
     src/tokenizer/tokenizer.cpp
     src/model/model_config.cpp
@@ -104,12 +106,14 @@ set(LIGHTLLM_HEADERS
     include/lightllm/engine/scheduler.h
     include/lightllm/tokenizer/tokenizer.h
     include/lightllm/engine/engine.h
+    include/lightllm/engine/draft_engine.h
     include/lightllm/engine/batch_loop.h
 )
 
 # engine_paged.cpp + engine_server.cpp contain inline CUDA kernels — compile with nvcc
 set_source_files_properties(src/engine/engine_paged.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(src/engine/engine_server.cpp PROPERTIES LANGUAGE CUDA)
+set_source_files_properties(src/engine/draft_engine.cpp PROPERTIES LANGUAGE CUDA)
 
 add_library(lightllm STATIC ${LIGHTLLM_SOURCES} ${LIGHTLLM_HEADERS})
 target_include_directories(lightllm PUBLIC include)
@@ -130,12 +134,14 @@ function(add_lightllm_test test_name test_source)
 endfunction()
 
 add_lightllm_test(test_tensor tests/test_tensor.cpp)
+add_lightllm_test(test_fp16 tests/test_fp16.cpp)
 add_lightllm_test(test_ops tests/test_ops.cu)
 add_lightllm_test(test_quality tests/test_quality.cu)
 add_lightllm_test(test_model tests/test_model.cpp)
 add_lightllm_test(test_e2e tests/test_e2e.cpp)
 add_lightllm_test(test_full_model tests/test_full_model.cpp)
 add_lightllm_test(test_paged_attention tests/test_paged_attention.cu)
+add_lightllm_test(test_attention_fp16 tests/test_attention_fp16.cpp)
 add_lightllm_test(test_paged_attention_v2 tests/test_paged_attention_v2.cu)
 add_lightllm_test(test_paged_prefill tests/test_paged_prefill.cu)
 add_lightllm_test(test_paged_model tests/test_paged_model.cpp)
@@ -158,6 +164,9 @@ add_lightllm_test(test_batch_loop tests/test_batch_loop.cpp)
 add_lightllm_test(test_prefix_cache tests/test_prefix_cache.cpp)
 add_lightllm_test(test_radix_engine tests/test_radix_engine.cpp)
 add_lightllm_test(test_mixed_users tests/test_mixed_users.cpp)
+add_lightllm_test(test_spec_decode tests/test_spec_decode.cpp)
+add_lightllm_test(test_verify_incremental tests/test_verify_incremental.cpp)
+add_lightllm_test(test_attention_divergence tests/test_attention_divergence.cpp)
 
 # --- Tools ---
 add_executable(bench_server tools/bench_server.cpp)
@@ -184,4 +193,11 @@ target_include_directories(bench_concurrency PRIVATE include)
 
 add_lightllm_test(bench_mixed_lengths tools/bench_mixed_lengths.cpp)
 add_lightllm_test(bench_max_users tools/bench_max_users.cpp)
+
+# Speculative decoding benchmark (inline CUDA kernels -> compile with nvcc)
+add_executable(bench_spec_decode tools/bench_spec_decode.cpp)
+target_link_libraries(bench_spec_decode PRIVATE lightllm CUDA::cudart CUDA::cublas)
+target_include_directories(bench_spec_decode PRIVATE include)
+set_source_files_properties(tools/bench_spec_decode.cpp PROPERTIES LANGUAGE CUDA)
+set_target_properties(bench_spec_decode PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 

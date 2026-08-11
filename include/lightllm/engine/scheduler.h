@@ -28,6 +28,11 @@ struct Request {
     int max_new_tokens = 64;
     int eos_token_id = 151643;
 
+    /// Sampling temperature.  When a grammar/schema is present the mask still
+    /// constrains valid tokens; temperature is an independent sampling knob
+    /// (0.0 = greedy, deterministic).  Default 1.0 (no scaling).
+    float temperature = 1.0f;
+
     /// JSON Schema for structured output (empty = unconstrained).
     std::string json_schema;
     /// Regex pattern for structured output (empty = unconstrained).

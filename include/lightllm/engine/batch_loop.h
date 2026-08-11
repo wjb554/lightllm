@@ -96,11 +96,14 @@ public:
     /// Submit a new request. Returns the assigned request ID immediately.
     /// @param json_schema  JSON Schema string (empty = unconstrained generation)
     /// @param regex        Regex pattern (empty = unconstrained; json_schema wins if both set)
+    /// @param temperature  sampling temperature (0.0 = greedy).  With a grammar
+    ///                     present the mask still constrains tokens.
     int submit(const std::vector<int>& prompt_tokens,
                int max_new_tokens = 64,
                int eos_token_id = 151643,
                const std::string& json_schema = "",
-               const std::string& regex = "");
+               const std::string& regex = "",
+               float temperature = 1.0f);
 
     /// Execute ONE scheduler.step() + engine.step() cycle.
     /// @return true if work was done, false if idle.
@@ -114,6 +117,13 @@ public:
 
     /// Access generated tokens for a finished request (empty if still active).
     const std::vector<int>& generated_tokens(int request_id) const;
+
+    /// Speculative decoding counters: accepted draft tokens.
+    int spec_accepted(int request_id) const;
+    /// Speculative decoding counters: total draft tokens produced.
+    int spec_drafted(int request_id) const;
+    /// Full speculative stats for a request (drafted/accepted/rejected/times).
+    SpeculativeStats spec_stats(int request_id) const;
 
     /// Number of active + waiting requests.
     int active_count() const;
@@ -141,6 +151,28 @@ public:
     double p99_tpot_ms() const;
     double p99_latency_ms() const;
     double throughput_tok_s() const;
+
+    // ---- Speculative decoding ----
+
+    /// Enable speculative decoding (delegates to EngineServer).
+    /// Must be called BEFORE any requests are submitted.
+    /// @param draft_layers  self-speculation depth (0 = auto n_layers_/4);
+    ///                      ignored when draft_model_dir is non-empty.
+    /// @param verify_batch  batched (M=k) verify; false = sequential (M=1)
+    ///                      which numerically matches the single-token draft
+    ///                      (higher acceptance, slower).
+    /// @param probability_acceptance  Leviathan probability-based acceptance
+    ///                      (output follows the target distribution, needed
+    ///                      for cross-scale dual models where strict argmax
+    ///                      acceptance collapses to ~0%).
+    void enable_speculative_decode(int num_draft_tokens = 4,
+                                   const std::string& draft_model_dir = "",
+                                   int draft_layers = 0,
+                                   bool verify_batch = false,
+                                   bool probability_acceptance = false);
+
+    /// Check if speculative decoding is active.
+    bool is_speculative() const { return engine_.is_speculative(); }
 
     // ---- Access underlying components ----
 

@@ -12,10 +12,13 @@
 ///     updates state.seq_len, sets state.next_hidden_state, and sets
 ///     state.finished on termination.  The batch loop must NOT duplicate
 ///     these mutations.
-///   - finished is always in sync with SampledToken::is_eos — when the engine
-///     sets state.finished=true it also returns is_eos=true in the token.
-///     There is no scenario where state.finished is true without a
-///     corresponding SampledToken.
+///   - With speculative decoding, EngineServer::speculative_step() appends
+///     0..K additional tokens to state.generated_tokens IN THE SAME step
+///     call (after the normal decode token is returned).  These speculative
+///     tokens count toward output_len but do NOT increment total_steps_.
+///   - state.finished can be set by either the normal decode EOS (st.is_eos)
+///     or by a speculative EOS token (where st.is_eos is false).  The
+///     termination check must handle both.
 
 #include "lightllm/engine/batch_loop.h"
 
@@ -58,6 +61,25 @@ BatchMainLoop::BatchMainLoop(EngineServer& engine,
            static_cast<int>(policy), chunk_size_, max_batch_tokens_, max_prefill_entries);
 }
 
+// ============================================================================
+// Speculative decoding
+// ============================================================================
+
+void BatchMainLoop::enable_speculative_decode(int num_draft_tokens,
+                                              const std::string& draft_model_dir,
+                                              int draft_layers,
+                                              bool verify_batch,
+                                              bool probability_acceptance) {
+    SpeculativeDecodeConfig cfg;
+    cfg.enabled                = true;
+    cfg.num_draft_tokens       = num_draft_tokens;
+    cfg.draft_model_dir        = draft_model_dir;
+    cfg.draft_layers           = draft_layers;
+    cfg.verify_batch           = verify_batch;
+    cfg.probability_acceptance = probability_acceptance;
+    engine_.enable_speculative_decode(cfg);
+}
+
 BatchMainLoop::~BatchMainLoop() {
     fprintf(stderr, "[BatchMainLoop] destructor: %zu states\n", states_.size());
     fflush(stderr);
@@ -87,7 +109,8 @@ int BatchMainLoop::submit(const std::vector<int>& prompt_tokens,
                           int max_new_tokens,
                           int eos_token_id,
                           const std::string& json_schema,
-                          const std::string& regex)
+                          const std::string& regex,
+                          float temperature)
 {
     int id = next_id_++;
 
@@ -100,6 +123,7 @@ int BatchMainLoop::submit(const std::vector<int>& prompt_tokens,
     sreq.eos_token_id    = eos_token_id;
     sreq.json_schema     = json_schema;
     sreq.regex           = regex;
+    sreq.temperature     = temperature;
     sreq.state           = Request::WAITING;
     sreq.num_computed    = 0;
 
@@ -160,21 +184,35 @@ bool BatchMainLoop::step() {
     }
 
     // ---- 3. EXECUTE (GPU forward pass) ----
-    //
-    // EngineServer::step() does ALL of the following:
-    //   - Allocates KV blocks as needed (appends to state.block_tables)
-    //   - Builds flat input tensor [total_tokens, D]
-    //   - Runs full transformer forward pass
-    //   - For prefill entries: updates num_prefilled, seq_len,
-    //     next_hidden_state
-    //   - For decode entries: appends token to generated_tokens, updates
-    //     seq_len and next_hidden_state, sets state.finished on termination
-    //   - Returns one SampledToken per decode entry (prefill returns none)
-    std::vector<SampledToken> output_tokens = engine_.step(batch, states_);
+    std::vector<SampledToken> output_tokens;
+    // Decode requests handled ENTIRELY by speculate() (verify-as-decode).
+    std::vector<int> spec_decode_ids;
+
+    if (engine_.is_speculative()) {
+        // verify-as-decode: prefill entries go to step() (which also keeps the
+        // pre-sample producing the first token); ALL decode entries go to
+        // speculate(), which produces the base + drafts in ONE target forward
+        // per request — eliminating step()'s separate decode pass.
+        std::vector<ScheduleEntry> step_entries, spec_entries;
+        for (const auto& e : batch.entries) {
+            if (e.is_prefill) step_entries.push_back(e);
+            else              spec_entries.push_back(e);
+        }
+        ScheduleStep step_batch = batch; step_batch.entries = step_entries;
+        ScheduleStep spec_batch = batch; spec_batch.entries = spec_entries;
+
+        output_tokens = engine_.step(step_batch, states_);
+        engine_.speculate(spec_batch, states_);
+        for (const auto& e : spec_entries)
+            spec_decode_ids.push_back(e.request_idx);
+    } else {
+        output_tokens = engine_.step(batch, states_);
+    }
 
     // ---- 4. PROCESS RESULTS ----
     double now = wall_clock();
 
+    // Non-spec decode tokens (returned by step()).
     for (const SampledToken& st : output_tokens) {
         int req_id = st.request_id;
 
@@ -205,12 +243,10 @@ bool BatchMainLoop::step() {
         }
 
         // --- Update token count ---
-        m.output_len++;
+        m.output_len = static_cast<int>(state.generated_tokens.size());
 
         // --- Check termination ---
-        // state.finished is set by EngineServer in the same code path
-        // that sets is_eos — they are always in sync.
-        if (st.is_eos) {
+        if (st.is_eos || state.finished) {
             m.finished        = true;
             m.finish_time_sec = now;
 
@@ -218,6 +254,31 @@ bool BatchMainLoop::step() {
             scheduler_->finish_request(req_id);
 
             // Release ALL KV cache blocks across every layer.
+            engine_.release_request(state);
+        }
+    }
+
+    // Spec decode requests: state was mutated by speculate() (no SampledToken).
+    for (int req_id : spec_decode_ids) {
+        auto state_it = states_.find(req_id);
+        if (state_it == states_.end()) continue;
+        RequestState& state = *state_it->second;
+        auto idx_it = metrics_index_.find(req_id);
+        if (idx_it == metrics_index_.end()) continue;
+        BatchMetrics& m = metrics_[idx_it->second];
+
+        // TTFT on first emitted token (the pre-sampled first token or the
+        // first speculate-accepted token).
+        if (!m.first_token_recorded && !state.generated_tokens.empty()) {
+            m.first_token_time_sec = now;
+            m.first_token_recorded = true;
+        }
+        m.output_len = static_cast<int>(state.generated_tokens.size());
+
+        if (state.finished) {
+            m.finished        = true;
+            m.finish_time_sec = now;
+            scheduler_->finish_request(req_id);
             engine_.release_request(state);
         }
     }
@@ -256,6 +317,22 @@ const std::vector<int>& BatchMainLoop::generated_tokens(int request_id) const {
     auto it = states_.find(request_id);
     if (it == states_.end()) return empty;
     return it->second->generated_tokens;
+}
+
+int BatchMainLoop::spec_accepted(int request_id) const {
+    auto it = states_.find(request_id);
+    return (it != states_.end()) ? it->second->spec_accepted : 0;
+}
+
+int BatchMainLoop::spec_drafted(int request_id) const {
+    auto it = states_.find(request_id);
+    return (it != states_.end()) ? it->second->spec_drafted : 0;
+}
+
+SpeculativeStats BatchMainLoop::spec_stats(int request_id) const {
+    auto it = states_.find(request_id);
+    if (it == states_.end()) return {};
+    return it->second->spec_stats;
 }
 
 int BatchMainLoop::active_count() const {

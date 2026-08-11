@@ -6,6 +6,8 @@
 #include <cstring>
 #include <stdexcept>
 
+#include <cuda_runtime.h>
+
 namespace lightllm {
 namespace kv_cache {
 
@@ -13,15 +15,16 @@ namespace kv_cache {
 
 BlockAllocator::BlockAllocator(int num_blocks, int block_size,
                                int num_kv_heads, int head_dim,
-                               PrefixCachePolicy policy)
+                               PrefixCachePolicy policy, DType kv_dtype)
     : num_blocks_(num_blocks), block_size_(block_size),
       num_kv_heads_(num_kv_heads), head_dim_(head_dim),
+      kv_dtype_(kv_dtype),
       policy_(policy),
       prefix_cache_(create_prefix_cache(policy, block_size)),
       k_storage_({num_blocks, block_size, num_kv_heads, head_dim},
-                  DType::F32, Device::CUDA),
+                  kv_dtype, Device::CUDA),
       v_storage_({num_blocks, block_size, num_kv_heads, head_dim},
-                  DType::F32, Device::CUDA)
+                  kv_dtype, Device::CUDA)
 {
     blocks_.resize(num_blocks);
     for (int i = 0; i < num_blocks; i++) {
@@ -193,17 +196,38 @@ void BlockAllocator::increment_ref(int block_id) {
     prefix_cache_->increment_ref(block_id);
 }
 
+void BlockAllocator::reset() {
+    // 1. Reset all block metadata
+    for (int i = 0; i < num_blocks_; i++) {
+        blocks_[i].ref_count = 0;
+        blocks_[i].token_hash = 0;
+    }
+
+    // 2. Rebuild free list (all blocks are free)
+    free_list_.clear();
+    for (int i = 0; i < num_blocks_; i++) {
+        free_list_.push_back(i);
+    }
+
+    // 3. Replace prefix cache with a fresh empty one
+    prefix_cache_ = create_prefix_cache(policy_, block_size_);
+
+    // 4. Zero GPU K/V storage
+    cudaMemset(k_storage_.raw(), 0, k_storage_.nbytes());
+    cudaMemset(v_storage_.raw(), 0, v_storage_.nbytes());
+}
+
 // ---- Accessors -------------------------------------------------------------
 
 void* BlockAllocator::k_data(int block_id) {
     size_t offset = static_cast<size_t>(block_id) * block_size_
-                    * num_kv_heads_ * head_dim_ * sizeof(float);
+                    * num_kv_heads_ * head_dim_ * dtype_size(kv_dtype_);
     return static_cast<char*>(k_storage_.raw()) + offset;
 }
 
 void* BlockAllocator::v_data(int block_id) {
     size_t offset = static_cast<size_t>(block_id) * block_size_
-                    * num_kv_heads_ * head_dim_ * sizeof(float);
+                    * num_kv_heads_ * head_dim_ * dtype_size(kv_dtype_);
     return static_cast<char*>(v_storage_.raw()) + offset;
 }
 
