@@ -1,0 +1,42 @@
+\contentsline {section}{\numberline {1}引言}{3}{section.1}%
+\contentsline {section}{\numberline {2}自回归解码的瓶颈与投机解码的动机}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}为什么自回归解码慢}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}降低成本的两种思路}{3}{subsection.2.2}%
+\contentsline {section}{\numberline {3}投机解码原理}{3}{section.3}%
+\contentsline {subsection}{\numberline {3.1}核心思想}{3}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}草稿阶段：逐个自回归生成}{4}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}验证阶段：一次批量前向}{4}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}接受判据}{4}{subsection.3.4}%
+\contentsline {subsubsection}{\numberline {3.4.1}严格 argmax 接受}{4}{subsubsection.3.4.1}%
+\contentsline {subsubsection}{\numberline {3.4.2}概率接受（Leviathan）}{4}{subsubsection.3.4.2}%
+\contentsline {subsubsection}{\numberline {3.4.3}草稿必须采样而非贪心}{5}{subsubsection.3.4.3}%
+\contentsline {subsection}{\numberline {3.5}残差修正与输出分布守恒定理}{5}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}连续前缀约束}{6}{subsection.3.6}%
+\contentsline {subsection}{\numberline {3.7}加速比的理论模型}{6}{subsection.3.7}%
+\contentsline {section}{\numberline {4}投机解码的发展历程}{6}{section.4}%
+\contentsline {subsection}{\numberline {4.1}早期并行解码尝试（2018--2021）}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}投机解码的独立提出（2022--2023）}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}工程化落地（2023--2024）}{7}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}后续演进（2024 至今）}{7}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}与本研究的关系}{7}{subsection.4.5}%
+\contentsline {section}{\numberline {5}系统架构设计}{7}{section.5}%
+\contentsline {subsection}{\numberline {5.1}分层结构}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}DraftEngine 抽象}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}批量验证原语 forward\_batched 与 run\_layers}{8}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}KV cache 一致性}{8}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.5}结构化输出（Grammar）集成}{8}{subsection.5.5}%
+\contentsline {subsection}{\numberline {5.6}采样参数化}{8}{subsection.5.6}%
+\contentsline {section}{\numberline {6}显存管理}{9}{section.6}%
+\contentsline {section}{\numberline {7}实验与结果}{9}{section.7}%
+\contentsline {subsection}{\numberline {7.1}自投机正确性（M = 24）}{9}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}0.5B 到 1.5B 双模型：接受判据的影响}{9}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}测试矩阵}{10}{subsection.7.3}%
+\contentsline {section}{\numberline {8}关键发现与设计决策}{10}{section.8}%
+\contentsline {subsection}{\numberline {8.1}GEMM 批量尺寸敏感}{10}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}layer-slice 自投机在深层小模型上的局限}{10}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}草稿采样是接受率的分水岭}{10}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}verify-as-decode：消除双计算（已实现）}{10}{subsection.8.4}%
+\contentsline {section}{\numberline {9}已知限制与未来工作}{11}{section.9}%
+\contentsline {section}{\numberline {10}结论}{11}{section.10}%
+\contentsline {section}{\numberline {A}配置项}{11}{appendix.A}%
+\contentsline {section}{\numberline {B}测试清单}{12}{appendix.B}%
